@@ -14,11 +14,25 @@ jobs:
           T: ${{ secrets.PACKAGIST_TOKEN }}
         run: |
           [ -n "$U" ] && [ -n "$T" ] || { echo "::error::PACKAGIST_USERNAME ou PACKAGIST_TOKEN vazio"; exit 1; }
-          # Mesmo formato do publish.yml do espelho: username/apiToken na query (o Packagist recusa Bearer aqui).
+          # FORMATO do que foi gravado, sem o valor: acusa e-mail no lugar do usuário, espaço/quebra de
+          # linha colados junto, ou texto que não tem cara de token.
+          shape() { v=$1; printf 'comprimento %s' "${#v}"
+            case "$v" in *@*) printf ', tem @ (parece e-mail)';; esac
+            case "$v" in *' '*|*$'\t'*|*$'\n'*|*$'\r'*) printf ', TEM espaço/quebra de linha';; esac
+            printf '%s' "$v" | grep -qE '^[A-Za-z0-9._-]+$' && printf ', só letras/números' || printf ', tem outros caracteres'; }
+          echo "PACKAGIST_USERNAME: $(shape "$U")"
+          echo "PACKAGIST_TOKEN:    $(shape "$T")"
           # Pede para reler o pacote do bZapper (já existe): 202 = credenciais aceitas.
+          body='{"repository":{"url":"https://github.com/bernisoftware/bzapper-php"}}'
+          # 1) mesmo formato do publish.yml do espelho: username/apiToken na query
           qu=$(jq -rn --arg v "$U" '$v|@uri'); qt=$(jq -rn --arg v "$T" '$v|@uri'); echo "::add-mask::$qt"
-          code=$(curl -s -o r.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
-            --data '{"repository":{"url":"https://github.com/bernisoftware/bzapper-php"}}' \
+          c1=$(curl -s -o r1.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data "$body" \
             "https://packagist.org/api/update-package?username=$qu&apiToken=$qt")
-          echo "Packagist HTTP $code — $(jq -r '.status // empty' r.json 2>/dev/null) $(jq -r '.message // empty' r.json 2>/dev/null)"
-          case "$code" in 200|202) echo "OK: Packagist aceitou";; *) echo "::error::Packagist recusou (HTTP $code)"; exit 1;; esac
+          echo "Packagist (query, como o publish.yml) HTTP $c1 — $(jq -r '[.status, .message] | map(select(.)) | join(" ")' r1.json 2>/dev/null)"
+          # 2) forma alternativa: Authorization: Bearer usuário:token
+          c2=$(curl -s -o r2.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data "$body" \
+            -H "Authorization: Bearer $U:$T" https://packagist.org/api/update-package)
+          echo "Packagist (Bearer) HTTP $c2 — $(jq -r '[.status, .message] | map(select(.)) | join(" ")' r2.json 2>/dev/null)"
+          case "$c1" in 200|202) echo "OK: Packagist aceitou no formato do publish.yml"; exit 0;; esac
+          case "$c2" in 200|202) echo "::warning::Packagist só aceitou via Bearer — ajustar o publish.yml"; exit 0;; esac
+          echo "::error::Packagist recusou nas duas formas (HTTP $c1 / $c2)"; exit 1
