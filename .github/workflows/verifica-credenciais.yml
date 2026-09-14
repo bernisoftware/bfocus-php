@@ -14,9 +14,11 @@ jobs:
           T: ${{ secrets.PACKAGIST_TOKEN }}
         run: |
           [ -n "$U" ] && [ -n "$T" ] || { echo "::error::PACKAGIST_USERNAME ou PACKAGIST_TOKEN vazio"; exit 1; }
+          # Mesmo formato do publish.yml do espelho: username/apiToken na query (o Packagist recusa Bearer aqui).
+          # Pede para reler o pacote do bZapper (já existe): 202 = credenciais aceitas.
+          qu=$(jq -rn --arg v "$U" '$v|@uri'); qt=$(jq -rn --arg v "$T" '$v|@uri'); echo "::add-mask::$qt"
           code=$(curl -s -o r.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
-            -H "Authorization: Bearer $U:$T" \
             --data '{"repository":{"url":"https://github.com/bernisoftware/bzapper-php"}}' \
-            https://packagist.org/api/update-package)
+            "https://packagist.org/api/update-package?username=$qu&apiToken=$qt")
           echo "Packagist HTTP $code — $(jq -r '.status // empty' r.json 2>/dev/null) $(jq -r '.message // empty' r.json 2>/dev/null)"
           case "$code" in 200|202) echo "OK: Packagist aceitou";; *) echo "::error::Packagist recusou (HTTP $code)"; exit 1;; esac
