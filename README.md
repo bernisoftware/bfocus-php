@@ -1,7 +1,8 @@
 # bFocus — SDK oficial para PHP
 
-Integre seu sistema (ERP, site, pipeline de CI) ao **bFocus**: clientes, contatos, produtos,
-release notes, base de conhecimento e agentes de IA pela API pública.
+Integre seu sistema (ERP, site, pipeline de CI) ao **bFocus**: clientes, pessoas, contatos,
+produtos, release notes, base de conhecimento e agentes de IA pela API pública — com lotes de até
+500 e identificadores extras para sincronizar a sua base.
 
 - PHP **8.1+**, sem dependências de runtime (só `ext-curl` e `ext-json`).
 - Novas tentativas automáticas **seguras** (idempotência embutida em toda escrita).
@@ -36,7 +37,7 @@ integração usa. Ela vai em `Authorization: Bearer <chave>` — a SDK cuida dis
 
 | Escopo | Permite |
 |---|---|
-| `customers:read` / `customers:write` | Ler / gravar clientes, contatos, produtos vinculados e interações |
+| `customers:read` / `customers:write` | Ler / gravar clientes, pessoas, contatos, produtos vinculados, interações, lotes e identificadores extras |
 | `products:read` / `products:write` | Ler / gravar o catálogo de produtos |
 | `release_notes:read` / `release_notes:write` | Ler / gravar e publicar release notes |
 | `kb:read` / `kb:write` | Ler e buscar / gravar, publicar e excluir artigos da base de conhecimento |
@@ -119,6 +120,142 @@ $bf->customers->interactions->create('ERP 1042', 'Pedido 1042 faturado.', [
     'is_internal'  => false,                     // visível ao cliente
 ]);
 foreach ($bf->customers->interactions->listAll('ERP 1042') as $i) { /* ... */ }
+```
+
+### Identificadores extras — `$bf->customers->identifiers`
+
+Liga o id de **outro sistema seu** (ex.: o código do CRM) ao mesmo cadastro, que continua com o
+`external_id` principal. Depois disso, chamar com o id extra acha o mesmo cliente. É idempotente;
+se o id já pertence a outro cadastro, vem `ConflictException` com código `IDENTIFIER_IN_USE`.
+
+```php
+$c = $bf->customers->identifiers->add('erp-1042', 'crm-88', ['label' => 'CRM']); // label é opcional
+print_r($c['identifiers']); // [['external_id' => 'crm-88', 'label' => 'CRM', 'source' => 'api']]
+$bf->customers->identifiers->remove('erp-1042', 'crm-88');
+```
+
+## Pessoas — `$bf->people`
+
+As pessoas do cliente: quem abre chamado, usa o widget e recebe e-mail. A pessoa é identificada
+pelo **seu** id do usuário — o mesmo `userExternalId` que você assina para o widget (por isso não
+pode ter `:`). Escopos `customers:read` / `customers:write`.
+
+```php
+$p = $bf->people->upsert('erp-1042', 'app-77', [
+    'name'       => 'Paula Reis',
+    'email'      => 'paula@padaria.example',
+    'role'       => 'Financeiro',
+    'is_primary' => true,
+    // 'extra_emails' => ['paula.reis@pessoal.example'], // somam aos que já existem
+]);
+echo $p['status']; // "created", "updated" ou "unchanged"
+
+$pessoas = $bf->people->list('erp-1042');       // com e sem acesso
+$bf->people->delete('erp-1042', 'app-77');       // retira o acesso (devolve a pessoa com access = false)
+$bf->people->upsert('erp-1042', 'app-77', ['access' => true]); // devolve o acesso
+```
+
+- **Nunca duplica**: o e-mail (ou o telefone) acha a pessoa que já chegou por e-mail ou por outro
+  sistema, e ela é adotada com o seu id. A mesma pessoa informada com **outro cliente** é
+  transferida para ele.
+- `delete()` **retira o acesso**: a pessoa continua no histórico dos chamados; um `upsert()` com
+  `'access' => true` devolve o acesso.
+- Parcial como os outros upserts: só as chaves presentes mudam.
+
+Identificadores extras da pessoa funcionam como os do cliente:
+
+```php
+$bf->people->identifiers->add('app-77', 'crm-p5', ['label' => 'CRM']);
+$bf->people->identifiers->remove('app-77', 'crm-p5');
+```
+
+## Lotes — `customers->batch()` e `people->batch()`
+
+Até **500 itens por chamada** (`Customers::BATCH_MAX` / `People::BATCH_MAX`). Acima disso a SDK
+lança `\InvalidArgumentException` **antes** de qualquer requisição — ela **não** divide sozinha,
+porque o `index` de cada resultado é a posição no lote enviado. Divida você:
+
+```php
+use Bfocus\Resources\Customers;
+
+// $clientes: cada item com os campos do customers->upsert() + 'external_id'
+foreach (array_chunk($clientes, Customers::BATCH_MAX) as $fatia) {
+    $r = $bf->customers->batch($fatia);
+    foreach ($r['results'] as $item) {
+        if ($item['status'] === 'error') {
+            error_log("cliente {$fatia[$item['index']]['external_id']}: {$item['error']} (HTTP {$item['code']})");
+        }
+    }
+}
+
+// Pessoas: 'customer_external_id' + 'external_id' da pessoa + os campos do people->upsert()
+$r = $bf->people->batch([
+    ['customer_external_id' => 'erp-1042', 'external_id' => 'app-77', 'name' => 'Paula Reis', 'email' => 'paula@padaria.example'],
+    ['customer_external_id' => 'erp-1043', 'external_id' => 'app-78', 'name' => 'Rui Lima'],
+]);
+print_r($r['summary']); // ['created' => 1, 'updated' => 0, 'unchanged' => 0, 'error' => 1]
+```
+
+Cada resultado traz `index`, `status` (`created`, `updated`, `unchanged` ou `error`),
+`external_id`, `merged_into` (o id enviado era um identificador extra: este é o principal do
+cadastro), `error` (código estável) e `code` (o status HTTP que o item teria sozinho). **Um item com
+erro não desfaz os outros** — confira `summary['error']`. Lista vazia devolve o resultado zerado
+sem fazer requisição. O lote inteiro é uma chamada: aceita `['idempotency_key' => ...]` como
+qualquer escrita.
+
+## Sincronizar clientes e usuários do seu sistema
+
+**Ids com o prefixo do sistema, sem `:`** — use `-` como separador (`erp-1042` para clientes,
+`app-77` para pessoas) ou UUIDs puros. Assim vários sistemas seus convivem no mesmo bFocus sem
+colisão. O id da pessoa é o `userExternalId` assinado no widget, e a assinatura recusa `:`.
+
+**Carga inicial (no deploy):** clientes em fatias de 500 → ligue cada cliente ao produto → pessoas
+em fatias de 500. Confira `summary['error']` e registre os itens com erro.
+
+```php
+use Bfocus\Resources\Customers;
+use Bfocus\Resources\People;
+
+foreach (array_chunk($clientes, Customers::BATCH_MAX) as $fatia) {
+    $r = $bf->customers->batch($fatia);
+    if ($r['summary']['error'] > 0) { /* registre os itens com status "error" */ }
+}
+foreach ($clientes as $c) {
+    $bf->customers->products->attach($c['external_id'], 'erp-cloud'); // idempotente
+}
+foreach (array_chunk($usuarios, People::BATCH_MAX) as $fatia) {
+    $r = $bf->people->batch($fatia);
+    if ($r['summary']['error'] > 0) { /* idem */ }
+}
+```
+
+**Depois, no dia a dia**, espelhe cada evento do seu sistema:
+
+| No seu sistema | Chamada |
+|---|---|
+| criou/alterou cliente | `$bf->customers->upsert($id, [...])` + `$bf->customers->products->attach($id, $slug)` |
+| criou/alterou usuário | `$bf->people->upsert($clienteId, $usuarioId, [...])` |
+| excluiu/desativou usuário | `$bf->people->delete($clienteId, $usuarioId)` |
+| excluiu cliente | `$bf->customers->delete($id)` |
+
+Se um resultado trouxer `merged_into`, o cadastro foi unificado: atualize o id do seu lado.
+
+**Nunca bloqueie a requisição do seu usuário esperando o bFocus.** Enfileire (job, tabela de
+outbox) e processe em segundo plano, tentando de novo com espera crescente. A SDK já repete
+429/5xx com a mesma `Idempotency-Key`; a fila cobre indisponibilidades longas.
+
+```php
+// no request do seu usuário: só enfileira
+$fila->push('bfocus.pessoa', ['cliente' => $empresa->codigo, 'usuario' => $usuario->id]);
+
+// no worker
+function sincronizarPessoa(\Bfocus\Bfocus $bf, array $job, Usuario $u): void
+{
+    // Exceção (rede fora, 5xx, 429 persistente) sobe: a fila tenta de novo mais tarde, com backoff.
+    $bf->people->upsert("erp-{$job['cliente']}", "app-{$job['usuario']}", [
+        'name' => $u->nome, 'email' => $u->email, 'access' => $u->ativo,
+    ]);
+}
 ```
 
 ## Produtos — `$bf->products`
@@ -327,6 +464,25 @@ $assinatura = \Bfocus\WidgetIdentity::sign(
 
 É um HMAC-SHA256 (hex minúsculo) de `v1:<userExternalId>:<customerExternalId>`. Nunca exponha o
 segredo no navegador.
+
+### Identidade v2 (com validade)
+
+A v2 carimba o instante: a API aceita a assinatura de **7 dias atrás até 5 minutos à frente**, então
+uma assinatura vazada deixa de valer sozinha. Gere **a cada renderização da página** — nunca guarde.
+Ela vai no mesmo lugar da v1 (a v1 continua aceita).
+
+```php
+$assinatura = \Bfocus\WidgetIdentity::signV2(
+    getenv('BFOCUS_WIDGET_SECRET'),
+    'app-77',   // userExternalId — não pode conter ":" (é o separador)
+    'erp-1042', // customerExternalId
+);
+// "v2.1789000000.3f9a…": v2.<segundos unix>.<HMAC-SHA256 hex de "v2:<ts>:<user>:<customer>">
+```
+
+O 4º argumento opcional fixa o instante: `int` em segundos unix (não milissegundos) ou
+`\DateTimeInterface`. Segredo vazio, `:` no id do usuário ou instante negativo geram
+`\InvalidArgumentException`.
 
 ## Versão
 

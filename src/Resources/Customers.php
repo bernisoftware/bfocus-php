@@ -64,10 +64,34 @@ use Bfocus\Page;
  *     page_size?: int
  * }
  * @phpstan-type Deleted array{deleted: bool}
+ * @phpstan-type CustomerBatchItem array{
+ *     external_id: string,
+ *     name?: string|null,
+ *     document?: string|null,
+ *     email?: string|null,
+ *     phone?: string|null,
+ *     website?: string|null,
+ *     notes?: string|null,
+ *     custom_fields?: list<CustomFieldInput>|null
+ * }
+ * @phpstan-type BatchItemResult array{
+ *     index: int,
+ *     status: 'created'|'updated'|'unchanged'|'error',
+ *     external_id: string|null,
+ *     merged_into: string|null,
+ *     error: string|null,
+ *     code: int|null
+ * }
+ * @phpstan-type BatchSummary array{created: int, updated: int, unchanged: int, error: int}
+ * @phpstan-type BatchResult array{results: list<BatchItemResult>, summary: BatchSummary}
  */
 final class Customers extends AbstractResource
 {
+    /** Máximo de itens por chamada de `batch()` (limite da API). A SDK NÃO divide: acima disso, erro. */
+    public const BATCH_MAX = 500;
+
     private const FIELDS = ['name', 'document', 'email', 'phone', 'website', 'notes', 'custom_fields'];
+    private const BATCH_FIELDS = ['external_id', 'name', 'document', 'email', 'phone', 'website', 'notes', 'custom_fields'];
     private const LIST_PARAMS = ['q', 'updated_since', 'page', 'page_size'];
     private const LIST_ALL_PARAMS = ['q', 'updated_since', 'page_size'];
 
@@ -80,6 +104,9 @@ final class Customers extends AbstractResource
     /** Interações (histórico/notas) de um cliente. */
     public readonly CustomerInteractions $interactions;
 
+    /** Identificadores extras (ids de outros sistemas seus) de um cliente. */
+    public readonly CustomerIdentifiers $identifiers;
+
     /** @internal */
     public function __construct(Transport $transport)
     {
@@ -87,6 +114,7 @@ final class Customers extends AbstractResource
         $this->contacts = new CustomerContacts($transport);
         $this->products = new CustomerProducts($transport);
         $this->interactions = new CustomerInteractions($transport);
+        $this->identifiers = new CustomerIdentifiers($transport);
     }
 
     /**
@@ -107,6 +135,39 @@ final class Customers extends AbstractResource
         $body = self::only($fields, self::FIELDS, 'customers->upsert');
 
         return $this->call('PUT', '/customers/' . self::segment($externalId, 'external_id'), [], $body, $options);
+    }
+
+    /**
+     * Cria/atualiza até 500 clientes numa chamada (`Customers::BATCH_MAX`). Cada item tem os
+     * mesmos campos do `upsert()` + `external_id` (obrigatório); só as chaves presentes mudam e
+     * `null` explícito limpa.
+     *
+     * Devolve um resultado por item (`index` = posição NESTE lote, `status`, `external_id`,
+     * `merged_into`, `error`, `code`) + `summary`. Um item com erro não desfaz os outros.
+     * A SDK NÃO divide: mais de 500 itens → `\InvalidArgumentException` antes de qualquer
+     * requisição (divida com `array_chunk($itens, Customers::BATCH_MAX)`). Lista vazia devolve
+     * o resultado zerado sem requisição.
+     *
+     * ```php
+     * $r = $bf->customers->batch([
+     *     ['external_id' => 'erp-1042', 'name' => 'Padaria Estrela'],
+     *     ['external_id' => 'erp-1043', 'name' => 'Mercado Sol', 'phone' => null],
+     * ]);
+     * echo $r['summary']['error'];
+     * ```
+     *
+     * @param iterable<CustomerBatchItem> $items
+     * @param RequestOptions $options
+     * @return BatchResult
+     * @throws BfocusException
+     */
+    public function batch(iterable $items, array $options = []): array
+    {
+        return $this->callBatch('/customers/batch', $items, self::BATCH_MAX, static function (mixed $item, int $position): array {
+            $item = self::batchItem($item, $position, 'external_id', 'customers->batch');
+
+            return self::only($item, self::BATCH_FIELDS, 'customers->batch');
+        }, 'customers->batch', $options);
     }
 
     /**

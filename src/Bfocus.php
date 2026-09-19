@@ -8,6 +8,7 @@ use Bfocus\Internal\Transport;
 use Bfocus\Resources\AiAgents;
 use Bfocus\Resources\Customers;
 use Bfocus\Resources\Kb;
+use Bfocus\Resources\People;
 use Bfocus\Resources\Products;
 use Bfocus\Resources\ReleaseNotes;
 
@@ -26,7 +27,7 @@ use Bfocus\Resources\ReleaseNotes;
 final class Bfocus
 {
     /** Versão da SDK. Vai no header `X-Bfocus-Client` de toda requisição. */
-    public const VERSION = '0.1.0';
+    public const VERSION = '0.2.0';
 
     /** Identificação da SDK enviada em `X-Bfocus-Client` e `User-Agent`. */
     public const CLIENT_ID = 'bfocus-php/' . self::VERSION;
@@ -38,6 +39,9 @@ final class Bfocus
 
     /** Clientes, contatos, produtos vinculados e interações. */
     public readonly Customers $customers;
+
+    /** Pessoas dos clientes (acesso ao widget/portal), lote e identificadores extras. */
+    public readonly People $people;
 
     /** Catálogo de produtos. */
     public readonly Products $products;
@@ -107,6 +111,7 @@ final class Bfocus
         );
 
         $this->customers = new Customers($transport);
+        $this->people = new People($transport);
         $this->products = new Products($transport);
         $this->releaseNotes = new ReleaseNotes($transport);
         $this->kb = new Kb($transport);

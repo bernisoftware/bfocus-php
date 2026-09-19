@@ -8,9 +8,12 @@ use Bfocus\Bfocus;
 use Bfocus\Exception\BfocusException;
 use Bfocus\Resources\AiAgents;
 use Bfocus\Resources\CustomerContacts;
+use Bfocus\Resources\CustomerIdentifiers;
 use Bfocus\Resources\Customers;
 use Bfocus\Resources\Kb;
 use Bfocus\Resources\KbArticles;
+use Bfocus\Resources\People;
+use Bfocus\Resources\PeopleIdentifiers;
 use Bfocus\Resources\Products;
 use Bfocus\Resources\ReleaseNotes;
 use Bfocus\Tests\Support\Cases;
@@ -53,6 +56,9 @@ final class ClientTest extends TestCase
 
         $this->assertInstanceOf(Customers::class, $bf->customers);
         $this->assertInstanceOf(CustomerContacts::class, $bf->customers->contacts);
+        $this->assertInstanceOf(CustomerIdentifiers::class, $bf->customers->identifiers);
+        $this->assertInstanceOf(People::class, $bf->people);
+        $this->assertInstanceOf(PeopleIdentifiers::class, $bf->people->identifiers);
         $this->assertInstanceOf(Products::class, $bf->products);
         $this->assertInstanceOf(ReleaseNotes::class, $bf->releaseNotes);
         $this->assertInstanceOf(Kb::class, $bf->kb);
@@ -90,6 +96,56 @@ final class ClientTest extends TestCase
                 $vector['expected'],
                 WidgetIdentity::sign($vector['secret'], $vector['user_external_id'], $vector['customer_external_id']),
             );
+        }
+    }
+
+    public function testWidgetIdentityV2Format(): void
+    {
+        $this->assertSame(
+            'v2.1789000000.' . hash_hmac('sha256', 'v2:1789000000:USR-1:ACME-1', 'bf_whs_x'),
+            WidgetIdentity::signV2('bf_whs_x', 'USR-1', 'ACME-1', 1789000000),
+        );
+        $this->assertMatchesRegularExpression('/^v2\.\d+\.[0-9a-f]{64}$/', WidgetIdentity::signV2('s', 'u', 'c'));
+    }
+
+    public function testWidgetIdentityV2DefaultsToNow(): void
+    {
+        $before = time();
+        $signature = WidgetIdentity::signV2('s', 'u', 'c');
+        [, $ts] = explode('.', $signature);
+        $this->assertEqualsWithDelta($before, (int) $ts, 5);
+        $this->assertSame(WidgetIdentity::signV2('s', 'u', 'c', (int) $ts), $signature);
+    }
+
+    public function testWidgetIdentityV2AcceptsDateTime(): void
+    {
+        $this->assertSame(
+            WidgetIdentity::signV2('s', 'u', 'c', 1790000123),
+            WidgetIdentity::signV2('s', 'u', 'c', new \DateTimeImmutable('2026-09-21T11:15:23.900-03:00')),
+            'DateTimeInterface vira segundos unix (fração descartada), independente do fuso',
+        );
+    }
+
+    public function testWidgetIdentityV2RejectsColonInUser(): void
+    {
+        try {
+            WidgetIdentity::signV2('s', 'app:77', 'erp-1042');
+            $this->fail('esperava InvalidArgumentException');
+        } catch (\InvalidArgumentException $e) {
+            $this->assertStringContainsString(':', $e->getMessage());
+        }
+        $this->assertStringStartsWith('v2.', WidgetIdentity::signV2('s', 'app-77', 'erp-1042', 0));
+    }
+
+    public function testWidgetIdentityV2RejectsEmptySecretAndNegativeInstant(): void
+    {
+        foreach ([['', 1], ['s', -1]] as [$secret, $at]) {
+            try {
+                WidgetIdentity::signV2($secret, 'u', 'c', $at);
+                $this->fail('esperava InvalidArgumentException');
+            } catch (\InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
         }
     }
 }

@@ -48,6 +48,27 @@ final class ConformanceTest extends TestCase
             'customers.list' => fn (Bfocus $bf, array $a) => $bf->customers->list($a),
             'customers.list_all' => fn (Bfocus $bf, array $a) => iterator_to_array($bf->customers->listAll($a), false),
             'customers.delete' => fn (Bfocus $bf, array $a) => $bf->customers->delete($a['external_id']),
+            'customers.batch' => fn (Bfocus $bf, array $a) => $bf->customers->batch($a['items']),
+            'customers.identifiers.add' => fn (Bfocus $bf, array $a) => $bf->customers->identifiers->add(
+                $a['external_id'],
+                $a['extra_id'],
+                $rest($a, 'external_id', 'extra_id'),
+            ),
+            'customers.identifiers.remove' => fn (Bfocus $bf, array $a) => $bf->customers->identifiers->remove($a['external_id'], $a['extra_id']),
+            'people.upsert' => fn (Bfocus $bf, array $a) => $bf->people->upsert(
+                $a['customer_external_id'],
+                $a['person_external_id'],
+                $rest($a, 'customer_external_id', 'person_external_id'),
+            ),
+            'people.list' => fn (Bfocus $bf, array $a) => $bf->people->list($a['customer_external_id']),
+            'people.delete' => fn (Bfocus $bf, array $a) => $bf->people->delete($a['customer_external_id'], $a['person_external_id']),
+            'people.batch' => fn (Bfocus $bf, array $a) => $bf->people->batch($a['items']),
+            'people.identifiers.add' => fn (Bfocus $bf, array $a) => $bf->people->identifiers->add(
+                $a['person_external_id'],
+                $a['extra_id'],
+                $rest($a, 'person_external_id', 'extra_id'),
+            ),
+            'people.identifiers.remove' => fn (Bfocus $bf, array $a) => $bf->people->identifiers->remove($a['person_external_id'], $a['extra_id']),
             'customers.contacts.list' => fn (Bfocus $bf, array $a) => $bf->customers->contacts->list($a['external_id']),
             'customers.contacts.upsert' => fn (Bfocus $bf, array $a) => $bf->customers->contacts->upsert(
                 $a['external_id'],
@@ -112,6 +133,14 @@ final class ConformanceTest extends TestCase
     {
         foreach (Cases::assoc()['signatures'] as $i => $v) {
             yield 'vetor ' . $i => [$v['secret'], $v['user_external_id'], $v['customer_external_id'], $v['expected']];
+        }
+    }
+
+    /** @return iterable<string, array{string, string, string, int, string}> */
+    public static function signatureV2Provider(): iterable
+    {
+        foreach (Cases::assoc()['signatures_v2'] as $i => $v) {
+            yield 'vetor v2 ' . $i => [$v['secret'], $v['user_external_id'], $v['customer_external_id'], $v['timestamp'], $v['expected']];
         }
     }
 
@@ -193,6 +222,13 @@ final class ConformanceTest extends TestCase
     public function testWidgetIdentitySignature(string $secret, string $user, string $customer, string $expected): void
     {
         $this->assertSame($expected, WidgetIdentity::sign($secret, $user, $customer));
+    }
+
+    #[DataProvider('signatureV2Provider')]
+    public function testWidgetIdentitySignatureV2(string $secret, string $user, string $customer, int $timestamp, string $expected): void
+    {
+        $this->assertSame($expected, WidgetIdentity::signV2($secret, $user, $customer, $timestamp));
+        $this->assertSame($expected, WidgetIdentity::signV2($secret, $user, $customer, (new \DateTimeImmutable('@' . $timestamp))));
     }
 
     public function testHelperOpsAreMapped(): void

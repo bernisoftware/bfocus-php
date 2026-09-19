@@ -81,6 +81,68 @@ abstract class AbstractResource
     }
 
     /**
+     * Lote de upserts (`customers->batch`, `people->batch`): até `$max` itens, SEM dividir.
+     *
+     * Acima do limite → `\InvalidArgumentException` antes de qualquer requisição (o `index` de
+     * cada resultado é a posição no lote enviado; quem chama divide). Lista vazia → resultado
+     * zerado sem requisição. `$serialize` valida e converte cada item para o formato do fio.
+     *
+     * @param iterable<mixed> $items
+     * @param \Closure(mixed, int): array<string, mixed> $serialize
+     * @param array<string, mixed> $options
+     * @return array{
+     *     results: list<array<string, mixed>>,
+     *     summary: array{created: int, updated: int, unchanged: int, error: int}
+     * }
+     */
+    protected function callBatch(string $path, iterable $items, int $max, \Closure $serialize, string $method, array $options): array
+    {
+        $list = [];
+        foreach ($items as $item) {
+            $list[] = $item;
+        }
+        if (count($list) > $max) {
+            throw new \InvalidArgumentException(sprintf(
+                '%s aceita até %d itens por chamada (recebeu %d); divida em lotes de %d.',
+                $method,
+                $max,
+                count($list),
+                $max,
+            ));
+        }
+        if ($list === []) {
+            return ['results' => [], 'summary' => ['created' => 0, 'updated' => 0, 'unchanged' => 0, 'error' => 0]];
+        }
+
+        // Valida TUDO antes da requisição: item inválido não sai.
+        $wire = [];
+        foreach ($list as $position => $item) {
+            $wire[] = $serialize($item, $position);
+        }
+
+        /** @var array{results: list<array<string, mixed>>, summary: array{created: int, updated: int, unchanged: int, error: int}} */
+        return $this->call('POST', $path, [], ['items' => $wire], $options);
+    }
+
+    /**
+     * Confere que o item do lote é um array com `$key` string não vazia.
+     *
+     * @return array<array-key, mixed>
+     */
+    protected static function batchItem(mixed $item, int $position, string $key, string $method): array
+    {
+        if (!is_array($item)) {
+            throw new \InvalidArgumentException(sprintf('%s: o item #%d precisa ser um array.', $method, $position));
+        }
+        $value = $item[$key] ?? null;
+        if (!is_string($value) || $value === '') {
+            throw new \InvalidArgumentException(sprintf('%s: o item #%d precisa de %s.', $method, $position, $key));
+        }
+
+        return $item;
+    }
+
+    /**
      * GET paginado → `Page`.
      *
      * @param array<string, mixed> $query
