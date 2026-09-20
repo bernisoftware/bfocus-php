@@ -13,8 +13,9 @@ use Bfocus\Internal\Transport;
  *
  * A pessoa é identificada pelo SEU id do usuário (`person_external_id`) — o mesmo
  * `userExternalId` assinado no widget; por isso não pode conter `:`. O e-mail (ou o telefone)
- * acha a pessoa que já chegou por e-mail ou por outro sistema: ela é adotada, nunca duplicada;
- * a mesma pessoa informada com outro cliente é transferida para ele.
+ * acha a pessoa que já chegou por e-mail ou por outro sistema: ela é adotada, nunca duplicada.
+ * A mesma pessoa informada com OUTRO cliente NÃO é transferida: ela é ligada também a ele — o
+ * cadastro é único e a mesma pessoa circula por vários clientes (`linked` na resposta diz isso).
  *
  * @phpstan-import-type RequestOptions from AbstractResource
  * @phpstan-import-type BatchResult from Customers
@@ -28,7 +29,8 @@ use Bfocus\Internal\Transport;
  *     access: bool,
  *     is_primary: bool,
  *     customer_external_id: string,
- *     custom_fields: list<array{key: string, label: string|null, type: string, value: mixed, visibility: string}>
+ *     custom_fields: list<array{key: string, label: string|null, type: string, value: mixed, visibility: string}>,
+ *     identifiers: list<array{external_id: string, label: string|null, source: string}>
  * }
  * @phpstan-type PersonUpsertResult array{
  *     external_id: string|null,
@@ -40,7 +42,23 @@ use Bfocus\Internal\Transport;
  *     is_primary: bool,
  *     customer_external_id: string,
  *     custom_fields: list<array{key: string, label: string|null, type: string, value: mixed, visibility: string}>,
- *     status: 'created'|'updated'|'unchanged'
+ *     identifiers: list<array{external_id: string, label: string|null, source: string}>,
+ *     status: 'created'|'updated'|'unchanged',
+ *     linked: bool,
+ *     merged_into: string|null
+ * }
+ * @phpstan-type PersonRevokeResult array{
+ *     external_id: string|null,
+ *     name: string,
+ *     email: string|null,
+ *     phone: string|null,
+ *     role: string|null,
+ *     access: bool,
+ *     is_primary: bool,
+ *     customer_external_id: string,
+ *     custom_fields: list<array{key: string, label: string|null, type: string, value: mixed, visibility: string}>,
+ *     identifiers: list<array{external_id: string, label: string|null, source: string}>,
+ *     unlinked: bool
  * }
  * @phpstan-type PersonFields array{
  *     name?: string|null,
@@ -141,11 +159,13 @@ final class People extends AbstractResource
     }
 
     /**
-     * Retira o acesso da pessoa (widget/portal). Ela continua no histórico; um `upsert()` com
-     * `access => true` devolve o acesso. Devolve a pessoa (com `access = false`).
+     * Retira o acesso da pessoa NESTE cliente (widget/portal). Ela continua no histórico; um
+     * `upsert()` com `access => true` devolve o acesso. Devolve a pessoa (com `access = false`) e
+     * `unlinked`: o acesso é DO VÍNCULO, então se ela também é de outros clientes continua ativa
+     * neles e `unlinked` volta `true`.
      *
      * @param RequestOptions $options
-     * @return Person
+     * @return PersonRevokeResult
      * @throws BfocusException `NotFoundException` com `PERSON_NOT_FOUND` / `CUSTOMER_NOT_FOUND`.
      */
     public function delete(string $customerExternalId, string $personExternalId, array $options = []): array

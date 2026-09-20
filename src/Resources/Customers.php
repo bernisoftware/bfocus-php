@@ -33,6 +33,9 @@ use Bfocus\Page;
  *     notes: string|null,
  *     custom_fields: list<CustomField>,
  *     is_active: bool,
+ *     logo_url: string|null,
+ *     extra_emails: list<string>,
+ *     extra_phones: list<string>,
  *     created_at: string|null,
  *     updated_at: string|null
  * }

@@ -156,8 +156,11 @@ $bf->people->upsert('erp-1042', 'app-77', ['access' => true]); // devolve o aces
 ```
 
 - **Nunca duplica**: o e-mail (ou o telefone) acha a pessoa que já chegou por e-mail ou por outro
-  sistema, e ela é adotada com o seu id. A mesma pessoa informada com **outro cliente** é
-  transferida para ele.
+  sistema, e ela é adotada com o seu id. A mesma pessoa informada com **outro cliente** NÃO é
+  transferida: fica **ligada** também a ele (`linked` volta `true` na resposta) — o cadastro é
+  único e a mesma pessoa circula por vários clientes.
+- **O acesso é do vínculo.** `delete()` (e `'access' => false`) tira o acesso dela NESTE cliente, não
+  nos outros: `unlinked` na resposta quer dizer que ela segue ativa em algum outro.
 - `delete()` **retira o acesso**: a pessoa continua no histórico dos chamados; um `upsert()` com
   `'access' => true` devolve o acesso.
 - Parcial como os outros upserts: só as chaves presentes mudam.
