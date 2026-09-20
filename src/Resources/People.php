@@ -27,7 +27,8 @@ use Bfocus\Internal\Transport;
  *     role: string|null,
  *     access: bool,
  *     is_primary: bool,
- *     customer_external_id: string
+ *     customer_external_id: string,
+ *     custom_fields: list<array{key: string, label: string|null, type: string, value: mixed, visibility: string}>
  * }
  * @phpstan-type PersonUpsertResult array{
  *     external_id: string|null,
@@ -38,6 +39,7 @@ use Bfocus\Internal\Transport;
  *     access: bool,
  *     is_primary: bool,
  *     customer_external_id: string,
+ *     custom_fields: list<array{key: string, label: string|null, type: string, value: mixed, visibility: string}>,
  *     status: 'created'|'updated'|'unchanged'
  * }
  * @phpstan-type PersonFields array{
@@ -48,7 +50,9 @@ use Bfocus\Internal\Transport;
  *     access?: bool|null,
  *     is_primary?: bool|null,
  *     extra_emails?: list<string>|null,
- *     extra_phones?: list<string>|null
+ *     extra_phones?: list<string>|null,
+ *     custom_fields?: list<array{key: string, label?: string, type?: string, value?: mixed}>|null,
+ *     clear?: list<string>|null
  * }
  * @phpstan-type PersonBatchItem array{
  *     customer_external_id: string,
@@ -60,7 +64,9 @@ use Bfocus\Internal\Transport;
  *     access?: bool|null,
  *     is_primary?: bool|null,
  *     extra_emails?: list<string>|null,
- *     extra_phones?: list<string>|null
+ *     extra_phones?: list<string>|null,
+ *     custom_fields?: list<array{key: string, label?: string, type?: string, value?: mixed}>|null,
+ *     clear?: list<string>|null
  * }
  */
 final class People extends AbstractResource
@@ -68,7 +74,7 @@ final class People extends AbstractResource
     /** Máximo de itens por chamada de `batch()` (limite da API). A SDK NÃO divide: acima disso, erro. */
     public const BATCH_MAX = Customers::BATCH_MAX;
 
-    private const FIELDS = ['name', 'email', 'phone', 'role', 'access', 'is_primary', 'extra_emails', 'extra_phones'];
+    private const FIELDS = ['name', 'email', 'phone', 'role', 'access', 'is_primary', 'extra_emails', 'extra_phones', 'custom_fields', 'clear'];
 
     /** Identificadores extras (ids de outros sistemas seus) de uma pessoa. */
     public readonly PeopleIdentifiers $identifiers;
@@ -86,6 +92,17 @@ final class People extends AbstractResource
      * existem. `access => false` retira o acesso; `access => true` devolve. O retorno traz
      * `status` (`created`, `updated` ou `unchanged`).
      *
+     * `custom_fields` é a exceção: quando enviada, a lista SUBSTITUI a lista inteira de campos
+     * personalizados da pessoa — campo que ficar de fora é REMOVIDO. Omitir a chave não mexe em
+     * nada. A `visibility` é decidida no bFocus e preservada entre sincronizações.
+     *
+     * `clear` APAGA contato: `['email']`, `['phone']` ou os dois. Apagar é EXPLÍCITO — `null`,
+     * lista vazia e chave ausente continuam significando "não mexe", e a SDK não traduz `null`
+     * em `clear`. Campo fora da lista aceita é RECUSADO (422 `PERSON_CLEAR_FIELD_INVALID`), não
+     * ignorado. E só se limpa a PRÓPRIA ficha: alcançando a pessoa por um identificador EXTRA, a
+     * API recusa (409 `PERSON_CLEAR_NOT_OWN_RECORD`) — apagar contato de ficha alcançada por
+     * apelido seria apagar dado de outro sistema.
+     *
      * ```php
      * $p = $bf->people->upsert('erp-1042', 'app-77', [
      *     'name' => 'Paula Reis', 'email' => 'paula@padaria.example', 'is_primary' => true,
@@ -96,7 +113,11 @@ final class People extends AbstractResource
      * @param PersonFields $fields
      * @param RequestOptions $options
      * @return PersonUpsertResult
-     * @throws BfocusException ex.: `ConflictException` com `PERSON_EMAIL_STAFF` / `PERSON_EMAIL_TAKEN`.
+     * @throws BfocusException ex.: `ConflictException` com `PERSON_EMAIL_STAFF`, `PERSON_EMAIL_TAKEN`,
+     *     `PERSON_PHONE_TAKEN` (o `getData()` diz de quem é o contato) ou `PERSON_CONTACT_OTHER_CUSTOMER`
+     *     (recusa definitiva: a pessoa é de outro cliente, e repetir não resolve);
+     *     `ValidationException` com `PERSON_CLEAR_FIELD_INVALID` e `ConflictException` com
+     *     `PERSON_CLEAR_NOT_OWN_RECORD` (ver `clear`, acima).
      */
     public function upsert(string $customerExternalId, string $personExternalId, array $fields = [], array $options = []): array
     {

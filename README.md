@@ -162,11 +162,126 @@ $bf->people->upsert('erp-1042', 'app-77', ['access' => true]); // devolve o aces
   `'access' => true` devolve o acesso.
 - Parcial como os outros upserts: só as chaves presentes mudam.
 
+### Campos personalizados da pessoa
+
+`custom_fields` leva o que só existe no seu sistema (matrícula, centro de custo, filial). É a
+**exceção** ao "só o que vier muda": a lista enviada **substitui a lista inteira** — campo que
+ficar de fora é **removido**. Mande sempre a lista que o seu sistema tem hoje; omitir a chave não mexe
+em nada, como em qualquer outro campo.
+
+A `visibility` é decidida no bFocus e **preservada entre sincronizações** — por isso ela não vai
+no envio, só volta na resposta: o seu ERP não rebaixa nem promove a exposição de um dado sem
+querer.
+
+Vale no upsert de pessoa, no lote de pessoas e na listagem de pessoas do cliente.
+
+```php
+$p = $bf->people->upsert('erp-1042', 'app-77', [
+    'custom_fields' => [                 // a lista INTEIRA do seu sistema
+        ['key' => 'matricula', 'label' => 'Matrícula', 'value' => '4471'],
+        ['key' => 'filial',    'label' => 'Filial',    'value' => 'Centro'],
+    ],
+]);
+foreach ($p['custom_fields'] as $campo) {
+    echo $campo['key'], ' ', $campo['value'], ' ', $campo['visibility'], PHP_EOL; // visibility vem do bFocus
+}
+```
+
+### Apagar o e-mail ou o telefone da pessoa
+
+Um contato gravado errado ficava preso para sempre: enquanto a ficha errada segurasse o
+telefone, nenhum reenvio o soltava. `clear` apaga.
+
+```php
+$bf->people->upsert('erp-1042', 'app-77', ['clear' => ['phone']]);            // some o telefone
+$bf->people->upsert('erp-1042', 'app-77', ['clear' => ['email', 'phone']]);   // some os dois
+```
+
+Três regras que parecem contraintuitivas e são de propósito:
+
+- **Apagar é explícito.** `'phone' => null`, `'clear' => []` e omitir a chave continuam
+  significando **"não mexe"** — a SDK não traduz `null` em `clear`. Fazer o `null` apagar teria
+  apagado, em silêncio e na primeira carga seguinte, o dado de todo sistema que manda `null`
+  para "não tenho esse valor".
+- **Campo fora da lista é recusado, não ignorado**: hoje só `'email'` e `'phone'`; qualquer
+  outro devolve 422 `PERSON_CLEAR_FIELD_INVALID` (`ValidationException`).
+- **Só se limpa a própria ficha.** Se você alcançou a pessoa por um identificador **extra**, a
+  API recusa com 409 `PERSON_CLEAR_NOT_OWN_RECORD` (`ConflictException`): apagar o contato de
+  uma ficha alcançada por apelido seria apagar dado de outro sistema. Para saber se o id que
+  você tem em mãos é o principal ou um extra, use `$bf->people->identifiers->list(...)`.
+
+Vale no `people->upsert()` e no `people->batch()` (`'clear' => ['phone']` no item).
+
+### Contato já usado: um 409 que você consegue resolver
+
+`PERSON_EMAIL_TAKEN` e `PERSON_PHONE_TAKEN` (409) não são "tente de novo": o e-mail (ou o
+telefone) já é de outra pessoa da conta. O erro diz **de quem**, em `getData()` (a API repete o mesmo
+detalhe em `getValidation()`, por compatibilidade):
+
+| campo | o que é |
+| --- | --- |
+| `field` | `email` ou `phone` — qual contato está tomado |
+| `owner_external_id` | o identificador da pessoa que já usa esse contato |
+| `owner_name` | o nome dela |
+| `owner_customer_external_id` | o cliente a que ela pertence |
+
+**É o `owner_customer_external_id` que decide a ação**, e os dois casos pedem coisas opostas:
+
+- **mesmo cliente que você enviou** → é quase sempre a MESMA pessoa em dois sistemas. Uma pessoa
+  tem **N identificadores**: registre o seu como **extra** dela. A partir daí o seu id encontra
+  essa pessoa.
+- **outro cliente** → ninguém decide sozinho a quem a pessoa pertence. Não force: registre o caso
+  e leve para quem conhece o cadastro. Unificar dois clientes é decisão de gente, não de um
+  casamento por e-mail.
+
+```php
+use Bfocus\Exception\ConflictException;
+
+try {
+    $bf->people->upsert('erp-1042', 'app-77', ['name' => 'Paula Reis', 'email' => 'paula@padaria.example']);
+} catch (ConflictException $e) {
+    if (!in_array($e->getErrorCode(), ['PERSON_EMAIL_TAKEN', 'PERSON_PHONE_TAKEN'], true)) {
+        throw $e;
+    }
+    $dono = $e->getData();
+    if (($dono['owner_customer_external_id'] ?? null) === 'erp-1042') {
+        // A mesma pessoa, com dois ids: o seu vira mais um identificador dela.
+        $bf->people->identifiers->add($dono['owner_external_id'], 'app-77', ['label' => 'ERP']);
+    } else {
+        // Dono em OUTRO cliente: não decida sozinho — registre e leve para o cadastro.
+        avisarCadastro($e->getErrorCode(), $dono);
+    }
+}
+```
+
+`PERSON_CONTACT_OTHER_CUSTOMER` (409) é o mesmo assunto pelo outro lado, e é **recusa
+definitiva**: a API não move mais uma pessoa de um cliente para outro só porque o e-mail (ou o
+telefone) casou. Repetir a chamada não resolve — trate como caso para o cadastro, nunca como
+falha temporária.
+
 Identificadores extras da pessoa funcionam como os do cliente:
 
 ```php
 $bf->people->identifiers->add('app-77', 'crm-p5', ['label' => 'CRM']);
 $bf->people->identifiers->remove('app-77', 'crm-p5');
+```
+
+### Ler os identificadores da pessoa (para reconciliar)
+
+`$bf->people->list(...)` mostra só o identificador **principal** de cada pessoa. Quando dois
+cadastros seus eram a mesma pessoa, um dos ids virou **extra** — e some da listagem sem ter
+sumido do cadastro. É isso que faz a sua conferência fechar "633 de 636" sem explicar os 3.
+
+`identifiers->list()` é a fonte de verdade dessa conferência, e é **leitura**: antes dela era
+preciso ESCREVER (tentar um `add()`) para descobrir o que tinha acontecido. Aceita no caminho o
+id principal **ou qualquer um dos extras**.
+
+```php
+$ids = $bf->people->identifiers->list('crm-p5'); // o id extra que "sumiu" da listagem
+echo $ids['external_id'], PHP_EOL;               // 'app-77' — o principal do cadastro
+foreach ($ids['identifiers'] as $i) {
+    echo $i['external_id'], ' ', $i['label'] ?? '-', ' ', $i['source'], PHP_EOL;
+}
 ```
 
 ## Lotes — `customers->batch()` e `people->batch()`
@@ -402,6 +517,11 @@ Toda resposta fora de 2xx vira uma exceção de `Bfocus\Exception\`, todas filha
 | `ServerException` | 5xx |
 | `NetworkException` | falha de conexão ou timeout (`getStatus()` = 0, código `NETWORK_ERROR`) |
 | `BfocusException` | qualquer outro status; e 2xx sem envelope JSON válido (HTML de proxy, corpo vazio…) com código `INVALID_RESPONSE` |
+
+Além de `getErrorCode()`, `getStatus()`, `getRequestId()`, `getValidation()`, `getRetryAfter()` e
+`getRequiredScope()`, a exceção tem **`getData()`**: o `data` do corpo, com o detalhe estruturado
+que alguns erros trazem (`[]` quando não há). É por ele que um 409 de contato tomado diz de **quem**
+é o contato — veja [Pessoas](#pessoas--bf-people).
 
 **Na sua lógica, use `getErrorCode()`** — é o código estável da API (`CUSTOMER_NOT_FOUND`,
 `VALIDATION_ERROR`…). A mensagem é para humanos e pode mudar.

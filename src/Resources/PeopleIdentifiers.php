@@ -23,6 +23,28 @@ final class PeopleIdentifiers extends AbstractResource
     private const PARAMS = ['label'];
 
     /**
+     * Todos os identificadores da pessoa: o principal (`external_id` do retorno) e os extras.
+     * Aceita no caminho o principal OU qualquer um dos extras. Escopo `customers:read`.
+     *
+     * É a fonte de verdade para RECONCILIAR: `people->list()` mostra só o identificador principal,
+     * então um id que virou extra some de lá sem ter sumido do cadastro — e, sem esta leitura, era
+     * preciso ESCREVER (tentar um `add()`) para descobrir o que tinha acontecido.
+     *
+     * ```php
+     * $ids = $bf->people->identifiers->list('crm-p5'); // um id extra também serve
+     * echo $ids['external_id'];                        // o principal do cadastro
+     * ```
+     *
+     * @param RequestOptions $options
+     * @return PersonIdentifiers
+     * @throws BfocusException `NotFoundException` (`PERSON_NOT_FOUND`).
+     */
+    public function list(string $personExternalId, array $options = []): array
+    {
+        return $this->call('GET', '/people/' . self::segment($personExternalId, 'person_external_id') . '/identifiers', [], null, $options);
+    }
+
+    /**
      * Liga `$extraId` à pessoa `$personExternalId`. Sem `label`, a requisição vai sem corpo.
      *
      * ```php

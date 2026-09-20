@@ -28,6 +28,7 @@ class BfocusException extends \RuntimeException
 {
     /**
      * @param array<string, mixed> $validation
+     * @param array<string, mixed> $data
      */
     public function __construct(
         string $message,
@@ -38,6 +39,7 @@ class BfocusException extends \RuntimeException
         private readonly ?int $retryAfter = null,
         private readonly ?string $requiredScope = null,
         ?\Throwable $previous = null,
+        private readonly array $data = [],
     ) {
         parent::__construct($message, $status, $previous);
     }
@@ -83,6 +85,21 @@ class BfocusException extends \RuntimeException
     }
 
     /**
+     * O `data` do corpo do erro: o detalhe estruturado que alguns erros trazem (vazio nos demais).
+     *
+     * É onde vem, por exemplo, de quem é o contato já usado num 409 `PERSON_EMAIL_TAKEN` /
+     * `PERSON_PHONE_TAKEN` (`field`, `owner_external_id`, `owner_name`,
+     * `owner_customer_external_id`) e o `owner` de um `IDENTIFIER_IN_USE`. A API repete esse
+     * detalhe em `getValidation()`, por compatibilidade com as SDKs que ainda não expunham `data`.
+     *
+     * @return array<string, mixed>
+     */
+    public function getData(): array
+    {
+        return $this->data;
+    }
+
+    /**
      * @internal Constrói a exceção certa a partir de uma resposta de erro.
      *
      * @param array<string, string> $headers nomes em minúsculas
@@ -110,6 +127,10 @@ class BfocusException extends \RuntimeException
             ?? self::nonEmptyString($headers['x-request-id'] ?? null)
             ?? self::nonEmptyString($sentRequestId);
         $validation = is_array($body['validation'] ?? null) ? $body['validation'] : [];
+        // `data` é o detalhe estruturado do erro (de quem é o contato já usado, o dono de um
+        // identificador…). A API também o repete em `validation`, mas quem lê o erro precisa
+        // alcançá-lo sem depender dessa duplicação.
+        $data = is_array($body['data'] ?? null) ? $body['data'] : [];
 
         $retryAfter = null;
         if ($status === 429) {
@@ -145,7 +166,7 @@ class BfocusException extends \RuntimeException
             default => self::class,
         };
 
-        return new $class($message, $code, $status, $requestId, $validation, $retryAfter, $requiredScope);
+        return new $class($message, $code, $status, $requestId, $validation, $retryAfter, $requiredScope, null, $data);
     }
 
     private static function nonEmptyString(mixed $value): ?string

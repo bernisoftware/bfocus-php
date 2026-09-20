@@ -6,6 +6,7 @@ namespace Bfocus\Tests;
 
 use Bfocus\Bfocus;
 use Bfocus\Exception\BfocusException;
+use Bfocus\Exception\ConflictException;
 use Bfocus\Exception\NetworkException;
 use Bfocus\Exception\ServerException;
 use Bfocus\Tests\Support\MockServer;
@@ -238,6 +239,42 @@ final class TransportTest extends TestCase
             $this->fail('esperava BfocusException');
         } catch (BfocusException $e) {
             $this->assertSame('VALIDATION_ERROR (HTTP 422): email: inválido [request_id=req-1]', $e->getMessage());
+        }
+    }
+
+    public function testConflictDataCarriesContactOwner(): void
+    {
+        // 409 acionável: `data` diz de QUEM é o contato (e a API repete em `validation`).
+        $dono = [
+            'field' => 'email',
+            'owner_external_id' => 'app-12',
+            'owner_name' => 'Paula Reis',
+            'owner_customer_external_id' => 'erp-1042',
+        ];
+        MockServer::script([
+            ['status' => 409, 'headers' => [], 'body' => [
+                'code' => 409, 'data' => $dono, 'message' => 'PERSON_EMAIL_TAKEN',
+                'error' => 'PERSON_EMAIL_TAKEN', 'validation' => $dono, 'request_id' => 'req-1',
+            ]],
+            ['status' => 404, 'headers' => [], 'body' => ['code' => 404, 'data' => null, 'error' => 'CUSTOMER_NOT_FOUND']],
+        ]);
+
+        $bf = $this->client();
+        try {
+            $bf->people->upsert('erp-1042', 'app-77', ['email' => 'paula@padaria.example']);
+            $this->fail('esperava ConflictException');
+        } catch (ConflictException $e) {
+            $this->assertSame('PERSON_EMAIL_TAKEN', $e->getErrorCode());
+            $this->assertSame($dono, $e->getData());
+            $this->assertSame('erp-1042', $e->getData()['owner_customer_external_id']);
+            $this->assertSame($dono, $e->getValidation());
+        }
+
+        try {
+            $bf->customers->get('erp-1042');
+            $this->fail('esperava NotFoundException');
+        } catch (BfocusException $e) {
+            $this->assertSame([], $e->getData());
         }
     }
 

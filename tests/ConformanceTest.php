@@ -63,6 +63,7 @@ final class ConformanceTest extends TestCase
             'people.list' => fn (Bfocus $bf, array $a) => $bf->people->list($a['customer_external_id']),
             'people.delete' => fn (Bfocus $bf, array $a) => $bf->people->delete($a['customer_external_id'], $a['person_external_id']),
             'people.batch' => fn (Bfocus $bf, array $a) => $bf->people->batch($a['items']),
+            'people.identifiers.list' => fn (Bfocus $bf, array $a) => $bf->people->identifiers->list($a['person_external_id']),
             'people.identifiers.add' => fn (Bfocus $bf, array $a) => $bf->people->identifiers->add(
                 $a['person_external_id'],
                 $a['extra_id'],
