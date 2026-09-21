@@ -25,6 +25,7 @@ use Bfocus\Internal\Transport;
  *     name: string,
  *     email: string|null,
  *     phone: string|null,
+ *     document: string|null,
  *     role: string|null,
  *     access: bool,
  *     is_primary: bool,
@@ -37,6 +38,7 @@ use Bfocus\Internal\Transport;
  *     name: string,
  *     email: string|null,
  *     phone: string|null,
+ *     document: string|null,
  *     role: string|null,
  *     access: bool,
  *     is_primary: bool,
@@ -52,6 +54,7 @@ use Bfocus\Internal\Transport;
  *     name: string,
  *     email: string|null,
  *     phone: string|null,
+ *     document: string|null,
  *     role: string|null,
  *     access: bool,
  *     is_primary: bool,
@@ -64,6 +67,7 @@ use Bfocus\Internal\Transport;
  *     name?: string|null,
  *     email?: string|null,
  *     phone?: string|null,
+ *     document?: string|null,
  *     role?: string|null,
  *     access?: bool|null,
  *     is_primary?: bool|null,
@@ -78,6 +82,7 @@ use Bfocus\Internal\Transport;
  *     name?: string|null,
  *     email?: string|null,
  *     phone?: string|null,
+ *     document?: string|null,
  *     role?: string|null,
  *     access?: bool|null,
  *     is_primary?: bool|null,
@@ -92,7 +97,7 @@ final class People extends AbstractResource
     /** Máximo de itens por chamada de `batch()` (limite da API). A SDK NÃO divide: acima disso, erro. */
     public const BATCH_MAX = Customers::BATCH_MAX;
 
-    private const FIELDS = ['name', 'email', 'phone', 'role', 'access', 'is_primary', 'extra_emails', 'extra_phones', 'custom_fields', 'clear'];
+    private const FIELDS = ['name', 'email', 'phone', 'document', 'role', 'access', 'is_primary', 'extra_emails', 'extra_phones', 'custom_fields', 'clear'];
 
     /** Identificadores extras (ids de outros sistemas seus) de uma pessoa. */
     public readonly PeopleIdentifiers $identifiers;
@@ -121,6 +126,12 @@ final class People extends AbstractResource
      * API recusa (409 `PERSON_CLEAR_NOT_OWN_RECORD`) — apagar contato de ficha alcançada por
      * apelido seria apagar dado de outro sistema.
      *
+     * `document` é o CPF da pessoa (com ou sem máscara; a resposta traz só os 11 dígitos). A
+     * PESSOA É ÚNICA: o mesmo CPF é sempre o mesmo cadastro, em qualquer produto. Id desconhecido
+     * + CPF de uma ficha existente → a resposta vem com `merged_into` = id principal dela (o seu
+     * id vira identificador extra). Id de uma ficha + CPF de OUTRA → as duas são mescladas na
+     * hora (`merged_into` = a que tinha o CPF). `null`/vazio NÃO apaga (não é campo do `clear`).
+     *
      * ```php
      * $p = $bf->people->upsert('erp-1042', 'app-77', [
      *     'name' => 'Paula Reis', 'email' => 'paula@padaria.example', 'is_primary' => true,
@@ -133,9 +144,12 @@ final class People extends AbstractResource
      * @return PersonUpsertResult
      * @throws BfocusException ex.: `ConflictException` com `PERSON_EMAIL_STAFF`, `PERSON_EMAIL_TAKEN`,
      *     `PERSON_PHONE_TAKEN` (o `getData()` diz de quem é o contato) ou `PERSON_CONTACT_OTHER_CUSTOMER`
-     *     (recusa definitiva: a pessoa é de outro cliente, e repetir não resolve);
+     *     (o contato é de uma pessoa de OUTRO cliente: a API não liga sozinha e repetir não resolve;
+     *     o `getData()` diz de quem é, para ligar pelo identificador extra se for a mesma pessoa);
      *     `ValidationException` com `PERSON_CLEAR_FIELD_INVALID` e `ConflictException` com
-     *     `PERSON_CLEAR_NOT_OWN_RECORD` (ver `clear`, acima).
+     *     `PERSON_CLEAR_NOT_OWN_RECORD` (ver `clear`, acima); `ValidationException` com
+     *     `PERSON_DOCUMENT_INVALID` (CPF inválido) e `ConflictException` com
+     *     `PERSON_DOCUMENT_CONFLICT` (a ficha já tem OUTRO CPF — nunca troca sozinho).
      */
     public function upsert(string $customerExternalId, string $personExternalId, array $fields = [], array $options = []): array
     {
