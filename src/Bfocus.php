@@ -27,7 +27,7 @@ use Bfocus\Resources\ReleaseNotes;
 final class Bfocus
 {
     /** Versão da SDK. Vai no header `X-Bfocus-Client` de toda requisição. */
-    public const VERSION = '0.2.3';
+    public const VERSION = '0.2.4';
 
     /** Identificação da SDK enviada em `X-Bfocus-Client` e `User-Agent`. */
     public const CLIENT_ID = 'bfocus-php/' . self::VERSION;

@@ -103,8 +103,12 @@ final class Customers extends AbstractResource
     /** Máximo de itens por chamada de `batch()` (limite da API). A SDK NÃO divide: acima disso, erro. */
     public const BATCH_MAX = 500;
 
-    private const FIELDS = ['name', 'document', 'email', 'phone', 'website', 'notes', 'custom_fields'];
-    private const BATCH_FIELDS = ['external_id', 'name', 'document', 'email', 'phone', 'website', 'notes', 'custom_fields'];
+    // O tipo `CustomerFields` e estas listas andam JUNTOS: `only()` recusa o que não estiver aqui antes de
+    // a requisição sair. Na 0.2.3 o tipo anunciou os campos de PJ/PF e as listas não — a SDK recusava.
+    private const FIELDS = ['name', 'document', 'kind', 'legal_name', 'state_registration', 'municipal_registration', 'id_document',
+        'email', 'phone', 'website', 'notes', 'custom_fields'];
+    private const BATCH_FIELDS = ['external_id', 'name', 'document', 'kind', 'legal_name', 'state_registration', 'municipal_registration', 'id_document',
+        'email', 'phone', 'website', 'notes', 'custom_fields'];
     private const LIST_PARAMS = ['q', 'updated_since', 'page', 'page_size'];
     private const LIST_ALL_PARAMS = ['q', 'updated_since', 'page_size'];
 
